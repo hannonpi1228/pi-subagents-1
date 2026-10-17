@@ -2545,6 +2545,24 @@ Terse command-style prompts produce shallow, generic work.
   const registeredAgentTool = withUsageReporting(agentTool);
   pi.registerTool(registeredAgentTool);
 
+  // Unlike pi-web-access's `web_enable`, this extension has no fallback
+  // activation path of its own -- `tool_search` is the ONLY way to reach a
+  // deferred Agent. Checked at session_start, not at registration: built-in
+  // extensions (including tool_search) are not guaranteed to have registered
+  // their tools yet at this extension's own load time, so an earlier check
+  // risks a false warning. Best effort: tool_search loading later in the same
+  // session (for example a lazy MCP-style activation) is not re-checked.
+  if (agentToolExposure === "deferred") {
+    pi.on("session_start", () => {
+      if (!pi.getAllTools().some((tool) => tool.name === "tool_search")) {
+        console.warn(
+          '[pi-subagents] toolExposure is "deferred" but tool_search is not active — Agent is unreachable this session. ' +
+            'Enable it with `"defaultTools": ["+tool_search"]` in Pi\'s settings, or set toolExposure back to "direct".',
+        );
+      }
+    });
+  }
+
   // ---- Workflow tool ----
 
   /**

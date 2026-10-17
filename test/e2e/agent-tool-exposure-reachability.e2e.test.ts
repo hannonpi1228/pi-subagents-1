@@ -24,7 +24,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createAgentSession, DefaultResourceLoader, SessionManager } from "@earendil-works/pi-coding-agent";
+import { createAgentSession, createToolSearchExtension, DefaultResourceLoader, SessionManager } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fauxModelBackend } from "../helpers/faux-model-backend.js";
 import { registerFauxProvider } from "../helpers/pi-ai.js";
@@ -55,12 +55,20 @@ describe("Agent tool exposure against real pi-mono", () => {
    * the real extension into a real session, and returns its declared and
    * registered tool names at construction time.
    */
-  async function toolsFor(settings: Record<string, unknown>): Promise<{ active: string[]; registered: string[] }> {
+  async function toolsFor(
+    settings: Record<string, unknown>,
+    options: { withToolSearch?: boolean } = {},
+  ): Promise<{ active: string[]; registered: string[] }> {
     writeFileSync(join(cwd, ".pi", "subagents.json"), JSON.stringify({ schedulingEnabled: false, ...settings }));
     const previousCwd = process.cwd();
     process.chdir(cwd);
     try {
-      const loader = new DefaultResourceLoader({ cwd, agentDir: cwd, additionalExtensionPaths: [EXTENSION] });
+      const loader = new DefaultResourceLoader({
+        cwd,
+        agentDir: cwd,
+        additionalExtensionPaths: [EXTENSION],
+        extensionFactories: options.withToolSearch ? [createToolSearchExtension()] : undefined,
+      });
       await loader.reload();
       expect(loader.getExtensions().errors).toEqual([]);
       const model = faux.getModel();
@@ -72,7 +80,14 @@ describe("Agent tool exposure against real pi-mono", () => {
         modelRuntime: backend.modelRuntime,
         resourceLoader: loader,
         sessionManager: SessionManager.inMemory(cwd),
+        // session_start does not fire unless requested -- needed for the
+        // tool_search warning tests below, which assert on it.
+        sessionStartEvent: { type: "session_start", reason: "startup" } as any,
       } as any);
+      // Extensions are registered during construction above, but event handlers
+      // (such as the tool_search warning's session_start listener) only fire
+      // once bound -- needed for the tool_search warning tests below.
+      await session.bindExtensions({});
       return { active: session.getActiveToolNames(), registered: session.getAllTools().map((t: any) => t.name) };
     } finally {
       process.chdir(previousCwd);
@@ -94,5 +109,30 @@ describe("Agent tool exposure against real pi-mono", () => {
   it("an invalid toolExposure value falls back to direct (Agent stays declared)", async () => {
     const { active } = await toolsFor({ toolExposure: "nonsense" });
     expect(active).toContain("Agent");
+  });
+
+  // Unlike pi-web-access's web_enable, this extension has no fallback activation path
+  // of its own: tool_search is the ONLY way to reach a deferred Agent. These two close
+  // the loop the unit-test mock (test/agent-tool-exposure.test.ts) can't -- they prove
+  // the warning condition against the real built-in tool_search extension, registered
+  // (or not) the same way a real pi session would load it.
+  it("warns when deferred and the real tool_search extension is not loaded", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await toolsFor({ toolExposure: "deferred" });
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('toolExposure is "deferred" but tool_search is not active'));
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("stays silent when deferred and the real tool_search extension is loaded", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await toolsFor({ toolExposure: "deferred" }, { withToolSearch: true });
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
   });
 });

@@ -76,8 +76,19 @@ export interface SubagentsSettings {
    * `acceptance`, `preflight`, `lane`, `control`, `workflow`, and more) is the
    * single largest contributor to Pi's per-turn tool-definitions payload in
    * measurements that drove this setting — see the project's cost diagnosis
-   * referenced in the README. The tool stays fully usable either way: this
-   * only changes whether its definition is sent on turns that never call it.
+   * referenced in the README.
+   *
+   * WARNING: unlike pi-web-access's `web_enable`, this extension has no
+   * fallback activation path of its own. If `tool_search` is not also
+   * enabled, `"deferred"` makes `Agent` completely unreachable for the
+   * entire session — there is no other way to declare it. A console
+   * warning fires at `session_start` when this is detected (best effort;
+   * `tool_search` loading later in the same session is not re-checked).
+   *
+   * Measured results are also model- and task-dependent, not a guaranteed
+   * cost reduction: on sessions that do end up spawning a subagent, the
+   * `tool_search` round trip can cost more than the avoided declaration
+   * saves. Benchmark against your own workload before relying on this.
    *
    * Read once at registration, like `schedulingEnabled`'s schema gating above;
    * flipping it takes effect on the next pi session.
